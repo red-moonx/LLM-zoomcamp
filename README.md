@@ -48,3 +48,4 @@ The course is composed of the following modules:
 
 ### 🏆 Capstone Project
 - Ship a complete end-to-end project of your choice from scratch
+
