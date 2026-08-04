@@ -82,9 +82,33 @@ Context:
 
 Finally, the formatted prompt containing both instructions and retrieved context is sent to the LLM to generate the final response.
 
+### Connecting to OpenAI (`openai_client`)
+
+To interact with OpenAI, we instantiate an `openai_client` object (an instance of the `OpenAI` class). This object manages connection settings, API credentials (API key), and network calls to OpenAI's servers:
+
+```python
+from openai import OpenAI
+
+openai_client = OpenAI()
+```
+
+### Calling the API (`responses.create` vs `chat.completions.create`)
+
+OpenAI provides two primary SDK methods for text generation:
+
+* **`responses.create` (modern / unified API):** OpenAI's newer, unified interface. Accepts direct inputs and returns cleaner output text (`response.output_text`):
+  ```python
+  response = openai_client.responses.create(
+      model='gpt-5.4-mini',
+      input=prompt
+  )
+  answer = response.output_text
+  ```
+* **`chat.completions.create` (legacy API):** The traditional endpoint. Requires a list of structured message dicts and nested response parsing (`response.choices[0].message.content`).
+
 ### Complete RAG pipeline
 
-We combine retrieval, prompt construction, and generation into a single end-to-end function:
+We combine retrieval, prompt construction, and generation into clean, reusable functions:
 
 ```python
 def build_context(search_results):
@@ -100,16 +124,29 @@ def build_prompt(question, search_results):
     context = build_context(search_results)
     return prompt_template.format(question=question, context=context).strip()
 
-def rag(question):
-    search_results = search(question)
-    prompt = build_prompt(question, search_results)
-    return llm(prompt)
+def llm(instructions, user_prompt, model='gpt-5.4-mini'):
+    message_history = [
+        {'role': 'developer', 'content': instructions},
+        {'role': 'user', 'content': user_prompt}
+    ]
+    response = openai_client.responses.create(
+        model=model,
+        input=message_history
+    )
+    return response.output_text
+
+def rag(query, model='gpt-5.4-mini'):
+    search_results = search(query)
+    prompt = build_prompt(query, search_results)
+    return llm(INSTRUCTIONS, prompt, model=model)
 ```
 
-With `rag(question)`:
-1. **Retrieval (R):** `search(question)` fetches the top matching documents from `minsearch`.
-2. **Prompt building:** `build_prompt(...)` formats the documents and question into context.
-3. **Augmented generation (AG):** `llm(prompt)` sends the complete context-grounded prompt to OpenAI for the final answer.
+Why `rag(query)` is our main orchestrator:
+1. **Retrieval (R):** `search(query)` fetches the top relevant documents from `minsearch`.
+2. **Augmentation (A):** `build_prompt(...)` combines retrieved context with the user's question.
+3. **Generation (G):** `llm(...)` passes developer rules and context to OpenAI to get the final answer.
+
+This packages the whole 3-step pipeline into a single, clean function call: `rag("your question")`.
 
 ## 4. Tokens and prompt caching
 
@@ -122,8 +159,9 @@ With `rag(question)`:
 * **Cost and speed:** Cached input tokens get a 50% discount and respond much faster.
 * **Prompt layout tip:** Always put static text (like system instructions and retrieved context) at the top of the prompt and variable text (like the user's question) at the bottom. This prevents breaking the cached prefix on every call.
 
-### Using role-based messages
-Instead of sending a single plain string to the API, you can structure your prompt as a list of message roles:
+### Using role-based messages (`message_history`)
+
+Since LLMs are stateless (they do not remember previous requests), we pass the full conversation context on every call using a list of message dictionaries (`message_history`).
 
 ```python
 message_history = [
@@ -133,9 +171,14 @@ message_history = [
 ```
 
 Why this improves your pipeline:
-* **Better instruction compliance:** Separating system rules from user input prevents user text or retrieved documents from overriding your instructions.
+* **Role hierarchy & authority:** Instructing the model with distinct roles (`developer`/`system`, `user`, `assistant`) ensures the LLM treats developer instructions as high priority.
+* **Security (prompt injection prevention):** Explicitly tagging user inputs as `'role': 'user'` prevents malicious user text or retrieved documents from overriding system instructions.
 * **Reliable caching:** Keeps the constant system message first so the prefix can be cached easily across calls.
-* **Chat support:** Makes it simple to support multi-turn conversations by just appending `assistant` and `user` follow-ups.
+* **Multi-turn chat support:** Enables conversation memory by appending alternating `user` and `assistant` messages to `message_history`.
+
+With this final step, we have implemented all three steps of the RAG pipeline. 
+
+## RAG helper
 
 
 
