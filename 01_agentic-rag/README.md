@@ -178,8 +178,31 @@ Why this improves your pipeline:
 
 With this final step, we have implemented all three steps of the RAG pipeline. 
 
-## RAG helper
+## 5. Modularizing RAG (`ingest.py` and `rag_helper.py`)
 
+To make our RAG pipeline reusable, clean, and extensible (for example, swapping `minsearch` for another search engine without rewriting code), we extract the logic into two Python modules:
+
+* **[ingest.py](file:///workspaces/LLM-zoomcamp/01_agentic-rag/ingest.py):** Handles fetching the FAQ documents (`load_faq_data`) and building the search index (`build_index`).
+* **[rag_helper.py](file:///workspaces/LLM-zoomcamp/01_agentic-rag/rag_helper.py):** Encapsulates the entire RAG pipeline within a reusable class (`RAGBase`), handling search, prompt building, LLM requests, and orchestration.
+
+### Example usage
+
+```python
+from ingest import load_faq_data, build_index
+from rag_helper import RAGBase
+from openai import OpenAI
+
+# 1. Load documents and build index
+documents = load_faq_data()
+index = build_index(documents)
+
+# 2. Initialize OpenAI client and RAG helper
+client = OpenAI()
+rag_app = RAGBase(index=index, llm_client=client)
+
+# 3. Query the pipeline
+answer = rag_app.rag("When does the course start?")
+```
 
 
 
