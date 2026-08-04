@@ -180,10 +180,34 @@ With this final step, we have implemented all three steps of the RAG pipeline.
 
 ## 5. Modularizing RAG (`ingest.py` and `rag_helper.py`)
 
-To make our RAG pipeline reusable, clean, and extensible (for example, swapping `minsearch` for another search engine without rewriting code), we extract the logic into two Python modules:
+To make our RAG pipeline reusable, clean, and extensible (for example, swapping `minsearch` for another search engine without rewriting code), we extract the logic into two Python modules: `ingest.py` and `rag_helper.py`.
 
-* **[ingest.py](file:///workspaces/LLM-zoomcamp/01_agentic-rag/ingest.py):** Handles fetching the FAQ documents (`load_faq_data`) and building the search index (`build_index`).
-* **[rag_helper.py](file:///workspaces/LLM-zoomcamp/01_agentic-rag/rag_helper.py):** Encapsulates the entire RAG pipeline within a reusable class (`RAGBase`), handling search, prompt building, LLM requests, and orchestration.
+### Data ingestion with `ingest.py`
+
+`ingest.py` is dedicated exclusively to data fetching and index preparation. It exposes two core functions:
+
+1. **`load_faq_data()`:** Fetches raw FAQ JSON data from the remote course repository.
+2. **`build_index(documents)`:** Initializes a `minsearch.Index` with `text_fields=['question', 'section', 'answer']` and `keyword_fields=['course']`, and fits it with the documents.
+
+These two functions are imported and executed in notebooks (such as [rag_cleaned.ipynb](file:///workspaces/LLM-zoomcamp/01_agentic-rag/rag_cleaned.ipynb)) or application entry points (like Streamlit apps or FastAPI endpoints) to prepare the search index before serving user queries.
+
+### Encapsulation with `rag_helper.py` (`RAGBase`)
+
+Instead of defining scattered functions across notebooks, [rag_helper.py](file:///workspaces/LLM-zoomcamp/01_agentic-rag/rag_helper.py) encapsulates the entire RAG pipeline into a reusable class named `RAGBase`.
+
+#### Why use a class? (Encapsulation and dependency injection)
+
+Using a class provides key architectural advantages:
+
+1. **Dependency injection and state management:** The constructor (`__init__`) receives and stores all essential dependencies as object attributes (`self.xxx`):
+   - **`index`:** The fitted `minsearch` index containing the FAQ documents.
+   - **`llm_client`:** The `OpenAI` client connection instance.
+   - **`model`:** The target LLM model string (defaults to `'gpt-5.4-mini'`).
+   - **`instructions`:** System/developer prompt rules enforcing strict context-based answering.
+   
+   Once injected at instantiation (`assistant = RAGBase(index, client)`), these attributes are preserved across calls without needing to pass them repeatedly.
+
+2. **Clean single-entry interface:** The internal methods (`search`, `build_context`, `build_prompt`, `llm`) handle step-by-step logic, while exposing a simple orchestrator method: `assistant.rag(query)`.
 
 ### Example usage
 
@@ -192,17 +216,37 @@ from ingest import load_faq_data, build_index
 from rag_helper import RAGBase
 from openai import OpenAI
 
-# 1. Load documents and build index
+# 1. Load documents and build index (from ingest.py)
 documents = load_faq_data()
 index = build_index(documents)
 
-# 2. Initialize OpenAI client and RAG helper
+# 2. Initialize OpenAI client and RAG helper (from rag_helper.py)
 client = OpenAI()
-rag_app = RAGBase(index=index, llm_client=client)
+assistant = RAGBase(index=index, llm_client=client)
 
 # 3. Query the pipeline
-answer = rag_app.rag("When does the course start?")
+answer = assistant.rag("When does the course start?")
 ```
+
+## 6. Data ingestion and persistence
+
+In basic in-memory pipelines (such as our initial setup with `minsearch`), data and search indexes exist solely in the RAM of the Python process.
+
+### Why we need data persistence
+
+Relying on purely in-memory indexing presents two major limitations:
+
+1. **Data volatility (lack of persistence):** Every time the Jupyter notebook kernel restarts, VS Code closes, or the server stops, the in-memory index is cleared. This forces us to re-download raw data and rebuild the entire index from scratch on every run.
+2. **Scalability limits:** In-memory indexes cannot scale to production workloads containing millions of documents or large vector embeddings that exceed available RAM.
+
+### Moving to persistent data storage
+
+To solve these limitations, production RAG systems separate the architecture into two distinct pipelines:
+
+* **Ingestion pipeline (one-time or scheduled batch):** A dedicated ingestion script (such as [persistent_rag_ingest.ipynb](file:///workspaces/LLM-zoomcamp/01_agentic-rag/persistent_rag_ingest.ipynb)) processes raw documents and persists the structured index to disk or an external database server.
+* **Query pipeline (on-demand):** Applications and notebooks (such as [persinsent_rag.ipynb](file:///workspaces/LLM-zoomcamp/01_agentic-rag/persinsent_rag.ipynb)) connect directly to the existing, pre-built persistent store to serve user queries instantly without re-indexing data.
+
+
 
 
 
