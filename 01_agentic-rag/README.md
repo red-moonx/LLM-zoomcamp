@@ -246,7 +246,250 @@ To solve these limitations, production RAG systems separate the architecture int
 * **Ingestion pipeline (one-time or scheduled batch):** A dedicated ingestion script (such as [persistent_rag_ingest.ipynb](file:///workspaces/LLM-zoomcamp/01_agentic-rag/persistent_rag_ingest.ipynb)) processes raw documents and persists the structured index to disk or an external database server.
 * **Query pipeline (on-demand):** Applications and notebooks (such as [persinsent_rag.ipynb](file:///workspaces/LLM-zoomcamp/01_agentic-rag/persinsent_rag.ipynb)) connect directly to the existing, pre-built persistent store to serve user queries instantly without re-indexing data.
 
+Essentially, we are separating the ingestion from the RAG assistant.
+
+## SQLite search (`sqlitesearch` and FTS5)
 
 
+To achieve data persistence, we replace `minsearch` with `sqlitesearch`, a Python library built on top of SQLite.
+
+### Key concepts
+
+* **SQLite:** A lightweight, serverless database storing all data locally in a single file (`faq.db`), ensuring data persists across application restarts.
+* **`sqlitesearch`:** A Python wrapper offering a simple `minsearch`-like interface (`TextSearchIndex`) while storing records directly in SQLite.
+* **FTS5 (Full-Text Search 5):** A native SQLite extension that creates an inverted index of text fields (similar to index pages at the back of a book), enabling high-speed keyword queries across thousands of documents.
+
+### Comparison: `minsearch` vs. `sqlitesearch`
+
+| Feature | `minsearch` | `sqlitesearch` |
+| :--- | :--- | :--- |
+| **Storage location** | Volatile RAM (cleared on kernel restart) | Persistent disk file (`faq.db`) |
+| **Search engine** | Custom in-memory Python index | Native SQLite FTS5 engine |
+| **Primary benefit** | Fast and zero-dependency setup | Permanent data storage & idempotency |
+
+## Agents
+
+Standard RAG follows a rigid, single-pass pipeline: **Retrieve $\rightarrow$ Prompt $\rightarrow$ Generate**. This flow leaves little room for recovery—if a query contains a typo or poor phrasing, keyword search may fail, leading to poor model answers. Agents solve this by introducing dynamic control flow, allowing the system to evaluate results, reformulate queries, and self-correct.
+
+### Function calling
+
+Using agents allows for greater flexibility by putting the LLM in charge. Instead of manually running search queries ourselves, we provide the LLM with a search tool so it can decide when to execute a search and what parameters to use.
+
+#### 1. Defining the search function
+
+First, we define a top-level search function that queries the index directly. The model will reference this function by name, so keeping the Python function name aligned with the tool name makes dispatching easier later on:
+
+```python
+def search(query):
+    boost_dict = {"question": 3.0, "section": 0.5}
+    filter_dict = {"course": "llm-zoomcamp"}
+
+    return index.search(
+        query,
+        num_results=5,
+        boost_dict=boost_dict,
+        filter_dict=filter_dict
+    )
+```
+
+#### 2. Defining the tool schema
+
+Next, we define the tool schema for the model. The model does not see Python code—it only receives a schema describing what the function does and what arguments it accepts. Because LLMs are language-agnostic and API calls use HTTP, tools are described using JSON rather than Python code (the same schema would work in TypeScript or Java):
+
+```python
+search_tool = {
+    "type": "function",
+    "name": "search",
+    "description": "Search the FAQ database for entries matching the given query.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Search query text to look up in the course FAQ."
+            }
+        },
+        "required": ["query"],
+        "additionalProperties": False
+    }
+}
+```
+
+The `description` field is critical because the model reads it to determine when the tool should be invoked. The `parameters` field follows JSON schema specifications for the arguments, and `query` is marked as required so the model always provides a search string. This tool schema is passed to the client via the native `tools` parameter (e.g., `tools=[search_tool]`), allowing the API to evaluate when to request function calls.
+
+### Execution flow and state management
+
+In this process of transforming standard RAG into agentic RAG, we make two calls to the LLM. Here is a summary of the process:
+
+1. Make a call to the LLM (first call).
+2. The LLM decides to invoke `search('params')`.
+3. We execute the search and obtain the results.
+4. Send the results back to the LLM (second call).
+5. The LLM processes the results.
+6. The LLM generates the final answer.
+
+Because LLMs are stateless, we must send the entire conversation history to the model before making the second call.
+
+First, we define `function_call_output`, which is the structured object where we package the execution result of our local function along with its matching request ID to send back to the LLM:
+
+```python
+function_call_output = {
+    "type": "function_call_output",
+    "call_id": call.call_id,
+    "output": result_json,
+}
+```
+
+`result_json` is the transformation of the search results into JSON format, which is readable by both humans and machines.
+
+Then, we append both the model's tool call request (`messages.append(call)` or `messages.extend(response.output)`; step 2) and the tool execution results (`messages.append(function_call_output)`; step 3) to the message history so the model has complete context for the second call (step 4). Note that because we make two API calls, we pay for input/output tokens on both step 1 and step 4.
+
+### The agentic loop
+
+In standard function calling, we make a fixed number of API calls. However, complex user queries may require multiple searches with different keywords before enough information is gathered to provide a complete answer. An agent solves this by running an autonomous loop.
+
+#### Multi-call execution flow
+
+1. Make the initial call to the LLM (first call).
+2. The LLM decides to invoke `search('params')`.
+3. We execute the search and obtain the results.
+4. Send the results back to the LLM (second call).
+5. The LLM processes the retrieved search results.
+6. If information is missing, the LLM decides to make another tool call with refined keywords.
+7. We execute the second search and send results back (third call).
+8. The LLM processes the new results and generates the final answer.
+
+Because we do not know in advance how many searches the model will need, we run a `while True` loop that executes tool calls until the LLM decides it has enough context to answer.
+
+#### Guiding the model with instructions
+
+We explicitly instruct the model to perform multiple searches in the system prompt:
+> *"Make multiple searches. First perform search, analyze the results, and then perform more searches using refined keywords if needed."*
+
+#### Tool dispatching with `make_call`
+
+To handle tool execution dynamically within the loop, we use a helper function named `make_call`:
+
+```python
+def make_call(call):
+    args = json.loads(call.arguments)
+
+    if call.name == "search":
+        result = search(**args)
+
+    result_json = json.dumps(result, indent=2)
+
+    return {
+        "type": "function_call_output",
+        "call_id": call.call_id,
+        "output": result_json,
+    }
+```
+
+`make_call` acts as a dispatcher: it parses the JSON arguments from the LLM, executes the native `search()` function (which queries the top 5 results with field boosting), and formats the output into a JSON object matching `call_id`.
+
+#### Implementation of the loop
+
+```python
+def agent_loop(instructions, question, model='gpt-5.4-mini') -> str:
+    messages = [
+        {'role': 'developer', 'content': instructions},
+        {'role': 'user', 'content': question}
+    ]
+
+    it = 1
+    while True:
+        print(f'iteration #{it}...')
+        has_function_calls = False
+
+        response = openai_client.responses.create(
+            model=model,
+            input=messages,
+            tools=[search_tool]
+        )
+
+        messages.extend(response.output)
+
+        for item in response.output:
+            if item.type == 'function_call':
+                call_output = make_call(item)
+                messages.append(call_output)
+                has_function_calls = True
+
+            elif item.type == 'message':
+                final_answer = item.content[0].text
+
+        it += 1
+        if not has_function_calls:
+            break
+
+    return final_answer
+```
+
+#### How stopping works
+
+The termination of the loop relies on a combination of LLM decision-making and Python control flow:
+
+1. **LLM evaluation:** On each turn, the model evaluates whether the retrieved results in `messages` answer all parts of the user query. If information is still missing, it outputs another `function_call` item with updated search terms. Once it has enough information, it stops requesting tool calls and outputs a standard text `message`.
+2. **Python termination:** Python tracks `has_function_calls`. When the LLM outputs no tool calls (`has_function_calls == False`), Python executes `break` to exit the loop.
+
+## Agent frameworks (ToyAIKit)
+
+While writing the agentic loop from scratch (`while True`, tool dispatchers, manual JSON schemas) provides a clear understanding of how agents work under the hood, building production applications usually relies on agent frameworks. `ToyAIKit` is a lightweight framework designed to abstract away this boilerplate.
+
+### Key abstractions in `ToyAIKit`
+
+1. **Automatic tool schema generation (`Tools`):**  
+   Instead of manually writing JSON schemas (`search_tool`), `Tools.add_tool(search)` inspects Python type hints and docstrings to automatically generate the JSON schema expected by the API.
+
+2. **Runner orchestration (`OpenAIResponsesRunner`):**  
+   Encapsulates the `while True` loop, tool routing, history management, and response handling into a single runner instance.
+
+3. **Rich UI callbacks (`IPythonChatInterface` & `DisplayingRunnerCallback`):**  
+   Provides interactive rendering in Jupyter notebooks (e.g. collapsible HTML views showing tool calls, inputs, and outputs).
+
+### Example usage
+
+```python
+from toyaikit.llm import OpenAIClient
+from toyaikit.tools import Tools
+from toyaikit.chat import IPythonChatInterface
+from toyaikit.chat.runners import OpenAIResponsesRunner
+
+# 1. Define function with type hints and docstrings
+def search(query: str) -> dict[str, str]:
+    """Search the FAQ database for entries matching the given query."""
+    return index.search(
+        query,
+        num_results=5,
+        boost_dict={'question': 3.0, 'section': 0.5},
+        filter_dict={'course': 'llm-zoomcamp'}
+    )
+
+# 2. Register tool (schema is auto-generated from function docstrings & type hints)
+agent_tools = Tools()
+agent_tools.add_tool(search)
+
+# 3. Initialize chat interface and runner
+chat_interface = IPythonChatInterface()
+runner = OpenAIResponsesRunner(
+    tools=agent_tools,
+    developer_prompt=instructions,
+    chat_interface=chat_interface,
+    llm_client=OpenAIClient(model='gpt-5.4-mini')
+)
+
+# 4. Run agent
+result = runner.run("How do I run Ollama locally?")
+```
+
+### Comparison: Manual loop vs. Framework (`ToyAIKit`)
+
+| Feature | Manual implementation | Framework (`ToyAIKit`) |
+| :--- | :--- | :--- |
+| **Tool schema** | Manually created JSON schema dictionary | Auto-generated from Python type hints & docstrings |
+| **Tool routing** | Custom `make_call()` dispatcher function | Built-in automatic tool dispatching |
+| **Loop management** | Custom `while True` loop with flags | `OpenAIResponsesRunner` manages state & termination |
+| **Notebook UI** | Plain text print statements | Interactive collapsible HTML components |
 
 

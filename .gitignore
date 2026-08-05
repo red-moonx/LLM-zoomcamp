@@ -1,3 +1,7 @@
 .venv/
 .env
 .agents/
+faq.db
+*.db
+*db-shm
+*db-wal
