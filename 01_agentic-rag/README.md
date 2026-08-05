@@ -435,7 +435,7 @@ The termination of the loop relies on a combination of LLM decision-making and P
 
 ## Agent frameworks (ToyAIKit)
 
-While writing the agentic loop from scratch (`while True`, tool dispatchers, manual JSON schemas) provides a clear understanding of how agents work under the hood, building production applications usually relies on agent frameworks. `ToyAIKit` is a lightweight framework designed to abstract away this boilerplate.
+While writing the agentic loop from scratch (`while True`, tool dispatchers, manual JSON schemas) provides a clear understanding of how agents work under the hood, building production applications usually relies on agent frameworks. `ToyAIKit` is a lightweight framework used in this module to abstract away this boilerplate. For production systems, frameworks like **LangGraph** (for stateful graph-based orchestration and human-in-the-loop workflows), **CrewAI**, **Smolagents**, and **PydanticAI** are common industry alternatives.
 
 ### Key abstractions in `ToyAIKit`
 
@@ -448,48 +448,63 @@ While writing the agentic loop from scratch (`while True`, tool dispatchers, man
 3. **Rich UI callbacks (`IPythonChatInterface` & `DisplayingRunnerCallback`):**  
    Provides interactive rendering in Jupyter notebooks (e.g. collapsible HTML views showing tool calls, inputs, and outputs).
 
-### Example usage
+### Registering tools
+
+The first thing we need to do is to register the tools (i.e., adding tools to the agent's toolbox) so the framework knows the tool is available for the LLM to call:
 
 ```python
-from toyaikit.llm import OpenAIClient
-from toyaikit.tools import Tools
-from toyaikit.chat import IPythonChatInterface
-from toyaikit.chat.runners import OpenAIResponsesRunner
+agent_tools = Tools()
+agent_tools.add_tool(search, search_tool)
+```
 
-# 1. Define function with type hints and docstrings
+We register our search function along with the explicit schema from earlier lessons.
+
+### Schema generation
+
+Writing JSON schemas by hand for every function is verbose. ToyAIKit allows us to skip manual schema creation by automatically generating the schema from Python **type hints** and **docstrings**:
+
+```python
 def search(query: str) -> dict[str, str]:
-    """Search the FAQ database for entries matching the given query."""
+    """
+    Search the FAQ database for entries matching the given query.
+    """
     return index.search(
         query,
         num_results=5,
-        boost_dict={'question': 3.0, 'section': 0.5},
-        filter_dict={'course': 'llm-zoomcamp'}
+        boost_dict={"question": 3.0, "section": 0.5},
+        filter_dict={"course": "llm-zoomcamp"}
     )
 
-# 2. Register tool (schema is auto-generated from function docstrings & type hints)
 agent_tools = Tools()
 agent_tools.add_tool(search)
+```
 
-# 3. Initialize chat interface and runner
+#### How ToyAIKit derives the schema
+
+1. **Type hints:** Specifies input parameter and return types (e.g., `query: str`). ToyAIKit inspects these hints to set parameter data types like `"type": "string"` in the JSON schema.
+2. **Docstrings:** The documentation string inside triple quotes (`"""..."""`). ToyAIKit extracts this text to populate the `"description"` field, telling the LLM what the tool does and when to call it.
+
+The output is the same JSON schema we hand-wrote in the function calling lesson. ToyAIKit generated it from the docstring and the type hint.
+
+Every modern agent framework does this same trick. It reads a typed Python function with a docstring and builds the schema from it. The OpenAI Agents SDK, PydanticAI, LangChain and Google ADK all work this way. You write the tool and the framework figures out how to describe it.
+
+### Chat interface and runner
+
+In simple terms, this component builds a custom, interactive ChatGPT-style assistant connected to our private FAQ dataset:
+
+- **`IPythonChatInterface` (UI layout):** Displays a clean chat interface inside Jupyter notebooks with collapsible view blocks for tool calls.
+- **`DisplayingRunnerCallback` (Live listener):** Renders updates in the notebook in real time as the agent thinks, invokes tools, and processes search results.
+- **`OpenAIResponsesRunner` (Automated loop):** Replaces our manual `while True` loop. It links the tools, instructions, UI, and LLM into an automated engine that handles tool execution and response cycles until the answer is complete.
+- **`OpenAIClient(model="gpt-5.4-mini")`:** Explicitly sets a model with strong instruction-following and tool-dispatching capabilities.
+
+```python
 chat_interface = IPythonChatInterface()
+callback = DisplayingRunnerCallback(chat_interface)
+
 runner = OpenAIResponsesRunner(
     tools=agent_tools,
     developer_prompt=instructions,
     chat_interface=chat_interface,
-    llm_client=OpenAIClient(model='gpt-5.4-mini')
+    llm_client=OpenAIClient(model="gpt-5.4-mini")
 )
-
-# 4. Run agent
-result = runner.run("How do I run Ollama locally?")
 ```
-
-### Comparison: Manual loop vs. Framework (`ToyAIKit`)
-
-| Feature | Manual implementation | Framework (`ToyAIKit`) |
-| :--- | :--- | :--- |
-| **Tool schema** | Manually created JSON schema dictionary | Auto-generated from Python type hints & docstrings |
-| **Tool routing** | Custom `make_call()` dispatcher function | Built-in automatic tool dispatching |
-| **Loop management** | Custom `while True` loop with flags | `OpenAIResponsesRunner` manages state & termination |
-| **Notebook UI** | Plain text print statements | Interactive collapsible HTML components |
-
-
