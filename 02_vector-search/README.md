@@ -131,3 +131,155 @@ Subclassing `RAGBase` highlights the strength of object-oriented modular design:
 - **Search flexibility:** We can swap `minsearch`, `sqlitesearch`, or `PGVector` by overriding `search()`.
 - **LLM flexibility:** We can switch LLM providers (e.g., Anthropic, Ollama, OpenAI) by overriding `llm()` without changing search or prompt building logic.
 
+## Persistent vector search with sqlitesearch
+
+### Exact vs. approximate nearest neighbors (ANN)
+
+- **Exact NN (k-NN):** Computes similarity against every document vector ($\mathcal{O}(N)$), guaranteeing 100% precision, which is ideal for smaller datasets.
+- **Approximate Nearest Neighbors (ANN):** Indexes vectors (e.g., using IVF or HNSW) to search only candidate clusters ($\mathcal{O}(\log N)$), trading a tiny fraction of accuracy for massive speedups at scale.
+
+### Persistent storage with `sqlitesearch`
+
+- **Disk persistence:** Unlike in-memory arrays, `sqlitesearch` saves vector indexes directly to disk (e.g., `faq_vectors2.db`), so embeddings persist across sessions without re-encoding ([vector_search_persistent.ipynb](file:///workspaces/LLM-zoomcamp/02_vector-search/code/vector_search_persistent.ipynb)).
+- **ANN indexing mode (`ivf`):** Configures `sqlitesearch` using `mode='ivf'` (Inverted File Index) to partition vector space into clusters for faster query retrieval.
+- **Single-notebook pipeline:** Demonstrates both index creation/persistence and running the full `RAGVector` assistant pipeline against SQLite in [vector_search_persistent.ipynb](file:///workspaces/LLM-zoomcamp/02_vector-search/code/vector_search_persistent.ipynb).
+
+
+## Vector search with pgvector
+
+While lightweight SQLite databases (`sqlitesearch`) work well for local experimentation, production RAG applications often require robust relational databases or enterprise vector stores.
+
+`pgvector` is PostgreSQL with the `vector` extension pre-installed, adding native vector storage, indexing, and similarity search capabilities directly inside a relational PostgreSQL database ([vector_search_pgvector.ipynb](file:///workspaces/LLM-zoomcamp/02_vector-search/code/vector_search_pgvector.ipynb)).
+
+### Production architecture: Ingestion vs. assistant
+
+In real-world production architectures, vector ingestion and assistant retrieval are decoupled into separate concerns:
+- **Ingestion pipeline:** Documents are batch-processed, encoded into vectors, and inserted into PostgreSQL as an offline background job.
+- **Assistant pipeline:** The live RAG assistant queries the pre-populated `pgvector` store, constructs context prompts, and calls the LLM at runtime.
+
+### Setup and schema initialization
+
+1. **Run PostgreSQL with `pgvector` using Docker:**
+   ```bash
+   docker run -it \
+       --name pgvector \
+       -e POSTGRES_USER=user \
+       -e POSTGRES_PASSWORD=password \
+       -e POSTGRES_DB=faq \
+       -p 5432:5432 \
+       pgvector/pgvector:pg16
+   ```
+
+2. **Enable the vector extension in PostgreSQL:**
+   ```sql
+   CREATE EXTENSION IF NOT EXISTS vector;
+   ```
+
+3. **Define table schema with a vector column:**
+   ```sql
+   CREATE TABLE documents (
+       id SERIAL PRIMARY KEY,
+       course TEXT,
+       section TEXT,
+       question TEXT,
+       answer TEXT,
+       embedding vector(384)
+   );
+   ```
+
+3. **Distance operators in `pgvector`:**
+   - `<=>`: Cosine distance. Similarity is computed as `1 - (embedding <=> query_vector)`.
+   - `<->`: Euclidean / L2 distance.
+   - `<#>`: Negative inner product (dot product).
+
+4. **Inserting documents and vector type casting (`vec_to_str`):**
+   PostgreSQL requires vector inputs as formatted string arrays (e.g. `'[0.12,-0.45,...]'`). We use `vec_to_str()` to convert Python vector arrays into strings, and `%s::vector` in SQL to cast the text string into PostgreSQL's internal `vector` column type:
+
+   ```python
+   def vec_to_str(vector):
+       return '[' + ','.join(str(x) for x in vector) + ']'
+
+   # Insert documents and cast formatted vector strings to vector type
+   for doc, vec in zip(documents, vectors):
+       conn.execute(
+           """
+           INSERT INTO documents (course, section, question, answer, embedding)
+           VALUES (%s, %s, %s, %s, %s::vector)
+           """,
+           (doc['course'], doc['section'], doc['question'], doc['answer'], vec_to_str(vec))
+       )
+
+   conn.commit()
+   ```
+
+### HNSW indexing in `pgvector`
+
+To accelerate vector queries using Approximate Nearest Neighbors (ANN), create an HNSW index with cosine distance operators:
+
+```sql
+CREATE INDEX ON documents
+USING hnsw (embedding vector_cosine_ops);
+```
+
+### Implementation (`RAGPgVector`)
+
+By subclassing `RAGBase`, we override `search()` to execute SQL vector similarity queries directly against PostgreSQL via `psycopg`:
+
+```python
+from rag_helper import RAGBase
+
+class RAGPgVector(RAGBase):
+
+    def __init__(self, embedder, conn, **kwargs):
+        super().__init__(index=None, **kwargs)
+        self.embedder = embedder
+        self.conn = conn
+
+    def search(self, query, num_results=5):
+        query_vector = self.embedder.encode(query)
+        query_str = '[' + ','.join(str(x) for x in query_vector) + ']'
+
+        rows = self.conn.execute(
+            """
+            SELECT course, section, question, answer
+            FROM documents
+            WHERE course = %s
+            ORDER BY embedding <=> %s::vector
+            LIMIT %s
+            """,
+            (self.course, query_str, num_results)
+        ).fetchall()
+
+        return [
+            {'course': r[0], 'section': r[1], 'question': r[2], 'answer': r[3]}
+            for r in rows
+        ]
+```
+
+### Usage
+
+```python
+# Initialize PostgreSQL vector assistant
+vector_assistant = RAGPgVector(
+    embedder=model,
+    conn=conn,
+    llm_client=openai_client,
+)
+
+# Run full RAG pipeline using pgvector store
+answer = vector_assistant.rag("the program has already begun, can I still sign up?")
+```
+
+
+## Next steps
+
+### When do we actually need vector search?
+
+Adding vector search introduces significant technical overhead (embedding models, vector indexes, specialized database setups, and higher infrastructure complexity). Before adopting vector search for a project or capstone, we must ask ourselves: **Is it really worth it?**
+
+- **Start simple with text search:** Traditional keyword/full-text search (like BM25, SQLite FTS, or `minsearch`) is fast, lightweight, zero-cost, and often fulfills initial product needs completely.
+- **When keyword search works best:** If users query using exact terms, product names, error codes, or specific domain jargon, text search performs exceptionally well.
+- **Hybrid search (best of both worlds):** Text search and vector search are not mutually exclusive. **Hybrid search** combines keyword retrieval (for exact terms, IDs, and jargon) with vector search (for semantic intent), reranking the combined results. In practice, hybrid search frequently outperforms either approach alone.
+- **Evaluating retrieval quality:** How do we know if vector search is actually needed? We determine this through systematic **evaluation** (measuring metrics like Hit Rate or MRR against a ground-truth dataset). We will cover retrieval evaluation in detail in Module 4.
+- **Recommended engineering workflow:** Always build a simple keyword search baseline first, evaluate its performance, and only introduce vector search (or hybrid search) when evaluation metrics prove that keyword search alone is insufficient.
+
