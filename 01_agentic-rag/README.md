@@ -13,6 +13,8 @@ uv add requests minsearch openai jupyter python-dotenv #installs the requirement
 ## What is RAG?
 RAG (Retrieval-Augmented Generation) is a technique that combines the power of Large Language Models (LLMs) with an external retrieval system to improve the accuracy and relevance of generated text. As one of the most common applications of LLMs, RAG allows models to retrieve domain-specific information from external knowledge bases that they were not originally trained on. 
 
+LLMs are only trained up to a specific knowledge cutoff date. While modern models can use live web search to fetch real-time information, web search alone is not a guarantee of accuracy because the model retrieves unverified information from across the web. Therefore, providing high-quality, targeted context is essential—LLMs perform only as well as the context they receive.
+
 This is especially useful for tasks that require up-to-date information or specialized knowledge, such as question answering over private documents, technical support, or customer service.
 
 By retrieving relevant text passages matching a user's query and passing them as **context** directly into the prompt, RAG grounds the LLM's generation in factual data. This dramatically reduces hallucinations and ensures the model synthesizes accurate answers strictly from the provided source information.
