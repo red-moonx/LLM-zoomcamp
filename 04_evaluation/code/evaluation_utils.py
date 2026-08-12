@@ -28,7 +28,7 @@ def calc_total_price(usages):
 
     return total_cost
 
-
+#this snippet is for structured output
 def llm_structured(client, instructions, user_prompt, output_type, model="gpt-5.4-mini"):
     messages = [
         {"role": "developer", "content": instructions},
