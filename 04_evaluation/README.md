@@ -118,4 +118,103 @@ for doc in tqdm(documents[:5]):
 - **`ground_truth.extend(records)`:** Appends all generated `(question, doc_id)` pair dicts into a flat master list.
 - **`usages.append(usage)`:** Accumulates token usage objects to track total API cost.
 
+### Persisting the ground-truth dataset
 
+After generating question-document pairs, we convert the dataset into a Pandas DataFrame and save it as a CSV file (`data/ground_truth-new.csv`).
+
+```python
+import pandas as pd
+
+df_ground_truth = pd.DataFrame(ground_truth)
+df_ground_truth.to_csv("data/ground_truth-new.csv", index=False)
+```
+
+**Why persist the ground truth to a CSV?**
+
+1. **Cost and speed efficiency:** Generating ground truth requires multiple LLM API calls, which consume time and credits. Saving to CSV allows downstream evaluation steps (`02-search-eval.ipynb`, `03-rag-evals.ipynb`, `04-llm-judge.ipynb`) to load the benchmark dataset instantly without re-generating questions.
+2. **Reproducibility and baseline consistency:** Having a fixed evaluation benchmark ensures fair comparison when testing different retrieval algorithms (text search vs vector search), prompt templates, or chunking strategies.
+3. **Offline evaluation:** Allows team members or benchmark runs to test search engines offline without needing live OpenAI API keys for dataset creation.
+
+## Search evaluation
+
+This work is covered in `02-search-eval.ipynb`. For all documents, we want to verify whether the generated question `q` successfully retrieves the source document `d` (`doc_id`) it was created from.
+
+### Verifying document matches
+
+To check if a search engine retrieves the expected source document, we compare the ID of each search result against the ground-truth `doc_id`:
+
+```python
+for d in results:
+    print(f'{d["id"]} == {doc_id}: {d["id"] == doc_id}')
+```
+
+**Simple explanation:**
+This loop iterates through the top search results (`results`) returned for a query and compares each document's ID (`d["id"]`) with the expected source document ID (`doc_id`). It prints `True` if a result matches the source document and `False` if it does not.
+
+### The relevance matrix
+
+Converting the boolean check (`d["id"] == doc_id`) into binary values (`1` for match, `0` for non-match) across all test queries produces a **relevance matrix** (`relevance_total`):
+
+```python
+relevance = []
+for d in results:
+    relevance.append(int(d["id"] == doc_id))
+```
+
+**Understanding rows and columns:**
+- **Each row = one generated test question:** Row 0 is Generated Question 1, Row 1 is Generated Question 2, etc. (synthesized from source documents by the LLM).
+- **Each column = search rank position:** Column 0 is the 1st search result, Column 1 is the 2nd result, up to top-N.
+- **At most one `1` per row:** Because each generated question comes from a single unique source document (`doc_id`), only one retrieved document can match. If the correct source document is not in the top-N results, the row is all zeros (`[0, 0, 0, 0, 0]`).
+
+```python
+# Example matrix for top-5 results across 4 generated queries
+relevance_total = [
+    [1, 0, 0, 0, 0],  # Generated Question 1: correct document at rank 1
+    [0, 1, 0, 0, 0],  # Generated Question 2: correct document at rank 2
+    [0, 0, 0, 0, 0],  # Generated Question 3: correct document not in top-5
+    [0, 0, 1, 0, 0]   # Generated Question 4: correct document at rank 3
+]
+```
+
+### Search evaluation metrics
+
+Once we have the relevance matrix (`relevance_total`), we compute two fundamental retrieval evaluation metrics:
+
+#### 1. Hit Rate (Recall@N)
+
+- **Concept:** Measures whether the search engine successfully retrieved the target document anywhere in the top-N results.
+- **Interpretation:** High Hit Rate means your search engine rarely misses the correct document completely.
+- **Calculation:** Percentage of matrix rows that contain at least one `1` (`True in row`).
+
+$$\text{Hit Rate} = \frac{\text{Number of queries where target doc was retrieved}}{\text{Total number of queries}}$$
+
+```python
+def hit_rate(relevance_total):
+    cnt = 0
+    for line in relevance_total:
+        if True in line:
+            cnt += 1
+    return cnt / len(relevance_total)
+```
+
+#### 2. Mean Reciprocal Rank (MRR)
+
+- **Concept:** Measures how high up in the result list the target document appears. It penalizes systems that return the target document at lower rank positions (e.g. rank 5 vs rank 1).
+- **Reciprocal Rank score:** $1 / \text{rank}$ for the position of the `1` in a row (rank 1 $= 1.0$, rank 2 $= 0.5$, rank 3 $= 0.33$, no match $= 0.0$).
+- **Calculation:** Average reciprocal rank across all evaluation queries.
+
+$$\text{MRR} = \frac{1}{|Q|} \sum_{i=1}^{|Q|} \frac{1}{\text{rank}_i}$$
+
+```python
+def mrr(relevance_total):
+    total_score = 0.0
+    for line in relevance_total:
+        for rank, val in enumerate(line):
+            if val == 1:
+                total_score += 1 / (rank + 1)
+                break
+    return total_score / len(relevance_total)
+```
+
+> [!TIP]
+> **MRR vs Hit Rate:** MRR is often a better metric to optimize for than Hit Rate alone because MRR rewards systems that place the target document at higher rank positions (e.g. rank 1 vs rank 5), whereas Hit Rate treats all top-N positions equally.
