@@ -215,6 +215,50 @@ def mrr(relevance_total):
                 break
     return total_score / len(relevance_total)
 ```
+mrr is a better metric to optimize for than hit rate because it rewards systems that return the target document at higher rank positions.
 
-> [!TIP]
-> **MRR vs Hit Rate:** MRR is often a better metric to optimize for than Hit Rate alone because MRR rewards systems that place the target document at higher rank positions (e.g. rank 1 vs rank 5), whereas Hit Rate treats all top-N positions equally.
+These metrics are based on synthetic data, which is the first step to understand if our search pipeline is working properly. For a final answer and for information, we will need to gather real user data and validate our metrics against it.
+
+## Search parameter tuning
+Now that we have our framework for evaluating, we can start tuning our search parameters.
+
+For example, here we are evaluating different boosting parameters for questions
+
+for boost in [0.5, 1.0, 3.0, 5.0, 10.0]:
+    result = evaluate(
+        ground_truth,
+        lambda query, boost=boost: search_boost(query, boost)
+    )
+    print(f"boost={boost}: {result}")
+
+and found that that boosting with 0.5 is better than boosting with 3. The best result (at the level of mrr) is with not boosting. 
+
+We can do this for all parameters and combinations: grid search.
+
+## RAG and agent evaluation
+
+To evaluate end-to-end RAG quality, we process each ground-truth question, generate an answer using the RAG pipeline, and pair it with the original reference answer for comparison:
+
+```python
+def generate_rag_answer(rec):
+    question = rec["question"]
+    doc_id = rec["document"]
+    original_doc = doc_idx[doc_id]
+
+    answer_llm = assistant.rag(question)
+    answer_orig = original_doc["answer"]
+
+    result = {
+        "question": question,
+        "answer_llm": answer_llm,
+        "answer_orig": answer_orig,
+        "document": doc_id,
+    }
+
+    return result
+```
+
+- **`assistant.rag(question)`:** Runs retrieval search, builds context, and generates the LLM answer (`answer_llm`).
+- **`doc_idx[doc_id]`:** Looks up the original ground-truth FAQ document to extract its reference answer (`answer_orig`).
+- **Comparison record:** Pairs `answer_llm` alongside `answer_orig` so an LLM judge can evaluate response quality.
+- **`RAGWithUsage`:** A subclass of `RAGBase` that tracks token usage and costs during batch evaluation.
