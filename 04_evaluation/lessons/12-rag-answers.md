@@ -31,6 +31,7 @@ Load the ground truth questions:
 import pandas as pd
 
 df_ground_truth = pd.read_csv("data/ground_truth-new.csv")
+#Convert the dataframe to a list of dictionaries, easier to iterate over
 ground_truth = df_ground_truth.to_dict(orient="records")
 ```
 

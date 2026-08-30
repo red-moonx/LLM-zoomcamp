@@ -236,7 +236,7 @@ and found that that boosting with 0.5 is better than boosting with 3. The best r
 We can do this for all parameters and combinations: grid search.
 
 ## RAG and agent evaluation
-
+This section is based on the script: 03-rag-evals.ipynb
 To evaluate end-to-end RAG quality, we process each ground-truth question, generate an answer using the RAG pipeline, and pair it with the original reference answer for comparison:
 
 ```python
@@ -262,3 +262,42 @@ def generate_rag_answer(rec):
 - **`doc_idx[doc_id]`:** Looks up the original ground-truth FAQ document to extract its reference answer (`answer_orig`).
 - **Comparison record:** Pairs `answer_llm` alongside `answer_orig` so an LLM judge can evaluate response quality.
 - **`RAGWithUsage`:** A subclass of `RAGBase` that tracks token usage and costs during batch evaluation.
+
+### LLM as judge
+
+This section is based on `04-llm-judge.ipynb` (and documented in `13-llm-as-judge.md`).
+
+The goal is offline evaluation of the full RAG pipeline ($A \to Q \to A'$), comparing the generated answer ($A'$) against the original ground-truth FAQ answer ($A$) for question ($Q$).
+
+### Key concepts
+
+- **Structured schema (`AnswerEvaluation`):** Uses Pydantic to enforce structured output containing `score` (`"good"` or `"bad"`) and `reasoning` (explanation of the verdict).
+- **Evaluation prompt:** Combines system instructions (`aqa_judge_instructions`) with formatted data (`aqa_judge_prompt`) comparing the question, ground truth, and AI answer.
+- **Parallel execution & cost:** Evaluates all records in parallel with `ThreadPoolExecutor` and tracks token usage cost via `calc_total_price`.
+- **Results & error analysis:** 
+  - Achieved ~96% good answers (379/395) at a cost of ~$0.25 USD.
+  - Answer accuracy (~96%) exceeded search Hit Rate (~85%) because the LLM can often answer correctly even with imperfect search context.
+  - Inspecting `"bad"` cases helps identify search misses, omitted details, or unnecessary fallback responses.
+- **Persisting results:** Saves evaluations to `data/rag-evaluations-new.csv`.
+
+## Agent evaluation
+
+This section is based on `04-agent-evaluation.ipynb` (and documented in `14-agent-evaluation.md`).
+
+The goal is offline evaluation of an autonomous AI agent, assessing both the final answer quality and the execution trajectory (`tool_calls`).
+
+### Key concepts
+
+- **Trajectory capturing (`tool_calls`):** Stores the list of tool invocations (function name and arguments) made during the agent loop (`runner.loop`).
+- **Dual evaluation schema (`AgentEvaluation`):** Uses Pydantic to enforce two independent scores:
+  - `answer_score` (`"good"` / `"bad"`) + `answer_reasoning`: Evaluates semantic correctness of the final response.
+  - `trajectory_score` (`"good"` / `"bad"`) + `trajectory_reasoning`: Evaluates relevance, query refinement, and lack of redundant tool calls.
+- **Judge prompt:** Combines system instructions (`agent_judge_instructions`) with data (`agent_judge_prompt`) passing the question, ground truth, agent answer, and formatted `tool_calls`.
+- **Diagnostic matrix:**
+  - `answer` **good** + `trajectory` **good**: Ideal autonomous execution.
+  - `answer` **good** + `trajectory` **bad**: Inefficient execution (redundant or poor search queries) that got lucky.
+  - `answer` **bad** + `trajectory` **good**: Synthesis failure (retrieved correct context but LLM misread or hallucinated).
+  - `answer` **bad** + `trajectory` **bad**: Total failure (wrong search terms, unhelpful context, wrong answer).
+- **Benchmark results (50 questions):** Achieved 45/50 good answers (~90%) and 49/50 good trajectories (~98%) at a total cost of ~$0.07 USD for agent execution + ~$0.05 USD for LLM judging.
+- **Persisting results:** Saves evaluations to `data/agent-evaluations.csv`.
+

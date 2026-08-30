@@ -136,6 +136,7 @@ openai_client = OpenAI()
 Prepare the document as JSON:
 
 ```python
+#LLM API only accepts strings (text), we convert our dict to string here:
 import json
 
 user_prompt = json.dumps(doc)

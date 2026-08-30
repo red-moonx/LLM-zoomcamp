@@ -69,9 +69,11 @@ ground truth.
 First, define the output format:
 
 ```python
+#Pydantic data schema: to enforce Structured Outputs when querying LLM as evaluator
 from pydantic import BaseModel, Field
 from typing import Literal
 
+#this schema guarantees the LLM returns a strict JSON object with exactly two validated fields
 class AnswerEvaluation(BaseModel):
     reasoning: str = Field(
         description="Reasoning about the quality of the answer."
