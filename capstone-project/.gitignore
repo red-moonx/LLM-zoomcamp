@@ -6,3 +6,6 @@ __pycache__/
 # Work-in-progress Documentation (Excluded until final)
 README_progress.md
 capstone_agent_progress.md
+
+# Environment variables
+.env
