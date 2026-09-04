@@ -26,23 +26,19 @@ Work through them in order:
 13. [Docker Compose](lessons/13-docker-compose.md) - Running everything together
 14. [Next Steps](lessons/14-next-steps.md) - OpenTelemetry, alerting, frameworks to learn more
 
+## 1. Assistant setup
 
-## Homework
+The assistant is a Python object (an instance of `RAGBase`) that encapsulates the entire RAG pipeline: it loads the course FAQ dataset into a `minsearch` in-memory search index, connects to the OpenAI API, and exposes a `rag(query)` method that executes the 3-step loop (search context $\to$ construct prompt $\to$ generate LLM response). Calling `create_assistant()` in `assistant.py` initializes this pipeline so it can be tested from the command line before wrapping it in a web UI or monitoring database.
 
-- [Homework](../cohorts/2026/05-monitoring/homework.md)
+## 2. Chat app
 
+The command-line assistant is wrapped into a lightweight web interface using Streamlit in `app.py`. It renders a text input field and submit button, forwarding user queries to `assistant.rag(user_input)` and displaying the generated answer. Running `make chat` launches `uv run streamlit run app.py` to serve the interactive web app locally or via GitHub Codespaces port forwarding.
 
-## Original workshop recording
+## 3. Capturing metrics
 
-This module was taught as a live workshop, which we chopped into the
-per-lesson videos above. To watch the full uncut recording:
-
-- [Monitoring LLM Applications: Traces, Feedback, and Production Quality](https://www.youtube.com/watch?v=ImY5-Q97sRw)
+To instrument the RAG pipeline and eliminate black-box execution, `metrics.py` defines an `LLMCallRecord` dataclass to hold call metadata (prompt, answer, token usage, response latency, cost, timestamp). The `RAGWithMetrics` subclass extends `RAGBase`, overriding the `llm()` method to measure execution time (`time.time()`), compute monetary cost via `calculate_cost()`, and stash the recorded metrics in `self.last_call`. Updating `assistant.py` to use `RAGWithMetrics` allows `app.py` to display latency, token consumption, and cost directly in the Streamlit UI.
 
 
-## Older content
 
-Earlier cohorts ran this module with a different stack:
 
-- [2024 edition](../cohorts/2024/04-monitoring/)
-- [2025 edition](../cohorts/2025/04-monitoring/)
+
