@@ -27,3 +27,11 @@ The goal is to ensure the LLM generates **natural, colloquial, "down-to-earth" q
 **Concept:** Ergogenic effects of caffeine in female specific sports.
 * **Bad (Academic):** "Does acute caffeine supplementation enhance intermittent sport-specific skills?"
 * **Good (Target Persona):** "I play recreational tennis a couple of times a week after work. Will drinking a pre-workout or strong coffee actually make me play better, or is that just marketing?"
+
+---
+
+## 🏆 Gold Standard for "Round 2" (Answer Quality)
+**Concept:** When generating the expert answers in Round 2, the LLM should output structured, real-world advice (not just one-liners). The following Q&A pair from Round 1 is considered the "Gold Standard" by the user and should be injected into the Round 2 Prompt as a few-shot example for the `answer` field:
+
+**Question:** "I'm a recreational runner and I train five times a week. Should I focus more on strength training or combining it with other types of training for better results?"
+**Answer:** "If you're training five times a week, consider incorporating strength training (ST) alongside your current routine. However, be aware that combining strength training with other modalities without rest (like high-intensity interval training) may lead to smaller improvements in lower-body strength compared to focusing primarily on strength training."
