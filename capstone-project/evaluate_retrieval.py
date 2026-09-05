@@ -3,7 +3,7 @@ import numpy as np
 from tqdm import tqdm
 from elasticsearch import Elasticsearch
 from elasticsearch.helpers import bulk
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import SentenceTransformer, CrossEncoder
 import warnings
 
 # Suppress Elasticsearch warnings for cleaner output
@@ -138,6 +138,23 @@ def search_hybrid(es, query: str, model, top_k: int = 5):
     response = es.search(index=INDEX_NAME, body=search_body)
     return [hit["_source"]["chunk_id"] for hit in response["hits"]["hits"]]
 
+def search_knn_reranked(es, query: str, model, cross_encoder, chunk_dict, top_k: int = 5):
+    # Retrieve top 50 candidates using KNN
+    knn_results = search_knn(es, query, model, top_k=50)
+    
+    # Create pairs of (query, document_content)
+    pairs = [[query, chunk_dict[chunk_id]] for chunk_id in knn_results]
+    
+    # Predict relevance scores
+    scores = cross_encoder.predict(pairs)
+    
+    # Combine chunk_ids and scores, then sort descending
+    results = list(zip(knn_results, scores))
+    results.sort(key=lambda x: x[1], reverse=True)
+    
+    # Return the top_k
+    return [x[0] for x in results[:top_k]]
+
 def evaluate(ground_truth, search_func, k_values=[5, 10, 15]):
     max_k = max(k_values)
     results = {k: {'hits': [], 'reciprocal_ranks': []} for k in k_values}
@@ -179,12 +196,18 @@ def print_metrics(name, metrics):
 def main():
     print(f"Loading SentenceTransformer model: {MODEL_NAME}...")
     model = SentenceTransformer(MODEL_NAME)
+    
+    print("Loading CrossEncoder model: cross-encoder/ms-marco-MiniLM-L-6-v2...")
+    cross_encoder = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
 
     # 1. Setup Elasticsearch and Index Data
     es = Elasticsearch(ES_URL)
     
     with open(CHUNKS_PATH, "r", encoding="utf-8") as f:
         chunks = json.load(f)
+    
+    # Create chunk_dict for fast lookup during reranking
+    chunk_dict = {c["chunk_id"]: c["content"] for c in chunks}
     
     # Skipping indexing since it's already done in the previous run
     # index_data(es, chunks, model)
@@ -202,10 +225,14 @@ def main():
     print("\n--- Evaluating Hybrid Search (BM25 + KNN) ---")
     metrics_hybrid = evaluate(ground_truth, lambda q, top_k=5: search_hybrid(es, q, model, top_k))
     
+    print("\n--- Evaluating KNN Search + CrossEncoder Reranking ---")
+    metrics_reranked = evaluate(ground_truth, lambda q, top_k=5: search_knn_reranked(es, q, model, cross_encoder, chunk_dict, top_k))
+    
     # Print results
     print_metrics("Text Search (BM25)", metrics_text)
     print_metrics("KNN Search (Vector)", metrics_knn)
     print_metrics("Hybrid Search (BM25 + KNN)", metrics_hybrid)
+    print_metrics("KNN Search + Reranker", metrics_reranked)
 
 if __name__ == "__main__":
     main()
