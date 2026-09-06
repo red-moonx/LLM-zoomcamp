@@ -1,104 +1,150 @@
 # Athletica 🏋️‍♀️
-> Evidence-based nutrition and physiology assistant for female athletes
+> Evidence-based nutrition, training, and physiology assistant for female athletes
 
 [![LLM Zoomcamp Capstone](https://img.shields.io/badge/Project-LLM%20Zoomcamp%20Capstone-blue.svg)](https://github.com/DataTalksClub/llm-zoomcamp)
-[![Status](https://img.shields.io/badge/Status-Deployment%20in%20Progress-orange.svg)]()
+[![Status](https://img.shields.io/badge/Status-Completed-success.svg)]()
 [![Python](https://img.shields.io/badge/Python-3.10%2B-brightgreen.svg)]()
 
-Athletica is an end-to-end retrieval-augmented generation (RAG) system designed to answer complex queries on female athlete physiology, relative energy deficiency in sport (RED-S), iron metabolism, menstrual cycle phase nutritional adjustments, and ISSN consensus guidelines using curated peer-reviewed literature.
+### 🌟 [Play with the Live App Here! (Click Me)](https://athletica-agentic-rag.streamlit.app) 🌟
+
+Athletica is an end-to-end **Agentic Retrieval-Augmented Generation (RAG)** system designed to answer complex queries on female athlete physiology, relative energy deficiency in sport (RED-S), iron metabolism, menstrual cycle phase nutritional adjustments, and ISSN consensus guidelines.
+
+Unlike standard RAG pipelines, Athletica acts as an autonomous agent that can iteratively search through curated peer-reviewed literature and execute mathematical physiological calculators to provide accurate, hallucination-free guidance backed by precise **PMID citations**.
 
 ---
 
-## Project overview
-
-Scientific literature on female sports physiology is dense and distributed across PubMed review articles, clinical guidelines, and consensus statements. **Athletica** bridges the gap between academic research and practical application by providing an accurate, hallucination-audited assistant that backs every answer with exact **PMID citations and author attributions**.
-
-### Key features
-- 📄 **Section-aware PDF chunking:** Preserves scientific document hierarchy (introduction, methods, discussion, consensus recommendations) rather than arbitrary character splits.
-- 🔍 **Semantic vector search:** High-precision vector indexing over embedded scientific passages.
-- 📑 **Rigorous citation system:** Automatically extracts and appends PMID sources and authors to generated answers.
-- 🧪 **Offline and online RAG evaluation:**
-  - **Retrieval metrics:** Hit Rate@N and Mean Reciprocal Rank (MRR) evaluated against a synthetic ground-truth dataset.
-  - **Generation metrics:** RAGAS framework (`faithfulness`, `answer_relevancy`, `context_precision`, `context_recall`) paired with custom LLM-as-a-judge Pydantic schemas.
-- 🖥️ **Interactive web interface:** Streamlit UI for querying physiological guidance.
-
----
-
-## Architecture and workflow
+## 🏗️ Architecture and workflow
 
 ```mermaid
 flowchart TD
     subgraph Data Ingestion
         A[Scientific PDFs<br/>PubMed & ISSN] --> B[Section-aware chunker]
-        B --> C[Vector database<br/>Embeddings index]
+        B --> C[(Elasticsearch<br/>Vector Index)]
     end
 
-    subgraph Query & Generation Pipeline
-        D[User query] --> E[Embedding model]
-        E --> F[Vector search retrieval]
-        C --> F
-        F --> G[RAG prompt & context synthesizer]
-        G --> H[LLM generator]
-        H --> I[Streamlit interface<br/>Answer + PMID citations]
-    end
-
-    subgraph Evaluation Suite
-        J[Synthetic ground-truth QA] --> K[Hit rate & MRR audit]
-        F --> K
-        H --> L[RAGAS & LLM-as-a-judge audit]
+    subgraph Agentic RAG Pipeline
+        D[User Query] --> E[OpenAI Agent<br/>gpt-4o-mini]
+        
+        E -->|Tool: search_medical_literature| F[Elasticsearch KNN]
+        F -.->|Results & Citations| E
+        
+        E -->|Tool: calculate_energy_availability| G[RED-S Calculator]
+        G -.->|EA Assessment| E
+        
+        E -->|Tool: issn_dosage_safety_checker| H[Dosage Verifier]
+        H -.->|Safety Warning| E
+        
+        E -->|Synthesizes Final Answer| I[Streamlit Interface<br/>Answer + Bibliography]
     end
 ```
 
 ---
 
-## Tech stack
+## 🚀 How to reproduce (local deployment)
 
-- **Language:** Python 3.10+
-- **LLM and embeddings:** OpenAI GPT-4o / HuggingFace Embeddings
-- **Vector database:** Qdrant / ChromaDB
-- **Evaluation framework:** RAGAS, Pydantic, custom LLM-as-a-judge
-- **User interface:** Streamlit
-- **Environment and package management:** `uv` / Docker
+To run the full Athletica pipeline on your local machine:
 
----
+### 1. Prerequisites
+- Docker and Docker Compose
+- Python 3.10+
+- An OpenAI API Key (Configure it in a `.env` file at the root of the project: `OPENAI_API_KEY=your_key_here`)
 
-## Project structure
-
-```text
-capstone-project/
-├── data/                  # Curated PubMed PDFs and ISSN consensus papers
-├── notebooks/             # Data exploration and synthetic QA generation
-├── src/
-│   ├── chunker.py         # Section-aware PDF parser and chunker
-│   ├── vector_store.py    # Vector database initialization and query methods
-│   ├── rag_engine.py      # Core RAG pipeline and PMID citation formatter
-│   └── evaluation.py      # Retrieval (Hit Rate, MRR) and RAGAS evaluation scripts
-├── app.py                 # Streamlit UI web application
-├── requirements.txt       # Dependencies
-└── README.md              # Project documentation
+### 2. Start the vector database
+We use Elasticsearch to store and retrieve the embedded scientific chunks. Start it via Docker:
+```bash
+docker start elasticsearch || docker run -d --name elasticsearch -p 9200:9200 -p 9300:9300 -e "discovery.type=single-node" -e "xpack.security.enabled=false" docker.elastic.co/elasticsearch/elasticsearch:8.4.3
 ```
 
+### 3. Setup virtual environment
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt  # Or use uv sync
+```
+
+### 4. Index the data (optional)
+The dataset is already parsed into `data/processed/optimizations/optimization_3/chunks.json`. 
+Run the retrieval script once to index these chunks into Elasticsearch:
+```bash
+python evaluate_retrieval.py
+```
+
+### 5. Launch the Streamlit app
+```bash
+streamlit run app.py
+```
+Open `http://localhost:8501` in your browser.
+
 ---
 
-## Evaluation strategy
+## 📈 Development journey & optimizations
 
-Athletica follows a strict offline evaluation protocol to ensure scientific accuracy and prevent physiological hallucinations:
+Building Athletica was an iterative process focused on maximizing scientific accuracy and eliminating hallucinations. Below is a summary of the optimizations and evaluations performed:
 
-1. **Synthetic ground-truth dataset:** Generated by parsing scientific PDFs into section-aware chunks ($C_i$) with unique metadata (`pmid`, `authors`) and prompting an LLM to generate realistic athlete queries ($Q$) and reference answers ($A$).
-2. **Chunk-level retrieval evaluation:** Assesses whether the exact target chunk ($C_i$) is returned in the top $K$ results using **Hit Rate@K** and **MRR**.
-3. **Faithfulness and citation audit:** Uses LLM-as-a-judge scoring alongside **RAGAS** to ensure facts originate exclusively from retrieved passages and PMIDs are accurate.
+### 1. Section-aware chunking (optimization 3)
+Arbitrary character splitting destroys scientific context. We built a custom parser to split the PDFs respecting logical boundaries (*Abstract, Methods, Discussion*) and filtering out bibliographic noise.
+- **Result:** Improved Baseline BM25 Hit Rate@15 from 29% to **43%**.
+
+### 2. Dense vector retrieval (optimization 4)
+BM25 struggled with colloquial synonyms (e.g., "pill" vs "oral contraceptives"). We introduced `sentence-transformers` (MiniLM-L6) to generate 384-dimensional dense vectors and used Elasticsearch KNN.
+- **Result:** Hit Rate@5 reached **31.7%** (MRR: 0.209). We also tested Cross-Encoder reranking which pushed Hit Rate@5 to **40.7%**.
+
+### 3. LLM-as-a-judge evaluation
+We generated a synthetic "Ground Truth" dataset of 600 QA pairs acting as an "expert sports scientist". Using strict Pydantic schemas, we evaluated our generation pipeline on a random sample of 50 questions:
+- **Faithfulness:** **100%**. Our strict prompt successfully forced the LLM to abstain ("I don't know") rather than hallucinate when the retriever failed.
+- **Relevance:** **50%**. Because the LLM couldn't hallucinate, relevance dropped to 0% whenever the pure vector search missed the exact chunk on the first try.
+
+### 4. Agentic RAG loop (optimization 5)
+To fix the 50% relevance bottleneck, we upgraded from a "One-Shot" RAG to an **Agentic RAG**. We provided the LLM with `search_medical_literature` as a callable tool inside a `while` loop. 
+- **Result:** The agent now reasons about its initial search results. If the retrieved chunks are irrelevant, it automatically triggers a second or third search with different keywords before answering. This drastically improved perceived relevance and user experience. We also added two custom mathematical tools (`calculate_energy_availability` and `issn_dosage_safety_checker`) to extend the agent's capabilities beyond mere text retrieval.
 
 ---
 
-## Roadmap and future extensions
+## 📚 Curated literature corpus (version 1.0)
 
-- [x] **Phase 1 (Core RAG MVP):** PDF section chunking, vector retrieval, Hit Rate/MRR evaluation, LLM-as-a-judge audit, and Streamlit UI. *(In progress)*
-- [ ] **Phase 2 (Agentic RAG):** Integrate custom Python calculation tools:
-  - `calculate_energy_availability`: Calculates EA ($EA = \frac{\text{EI} - \text{EEE}}{\text{FFM}}$) to assess RED-S risk.
-  - `issn_dosage_safety_checker`: Verifies supplement dosage safety against ISSN female athlete recommendations.
+Athletica's knowledge base is strictly curated using highly targeted PubMed queries for open-access papers (2021-2026) focusing exclusively on female athlete physiology.
+
+| Category / Pillar | Year | Title | PMID |
+| :--- | :---: | :--- | :---: |
+| **RED-S & energy availability** | 2026 | *Optimising gynaecological surgical care for elite female athletes: a narrative review* | `42488699` |
+| **RED-S & energy availability** | 2026 | *Protecting women's health in sport: the role of low energy availability in the Female Athlete Triad and RED-S* | `42245081` |
+| **RED-S & energy availability** | 2026 | *A Longitudinal Evaluation of Bone Mineral Density Across a Macrocycle in Highly Trained Female Athletes* | `42043094` |
+| **RED-S & energy availability** | 2026 | *Rethinking Energy Availability from Conceptual Models to Applied Practice* | `41683203` |
+| **Menstrual cycle & nutrition** | 2026 | *Menstrual Cycle and Hormonal Contraceptives in Female Athletes: Should Symptoms and Nutrition Matter More than Cycle Phase?* | `41978194` |
+| **Menstrual cycle & nutrition** | 2025 | *Female trail running: a systematic scoping review* | `41635506` |
+| **Menstrual cycle & nutrition** | 2025 | *Exercise performance at different phases of the menstrual cycle: measurements, differences, and mechanisms* | `41476925` |
+| **Resistance & endurance** | 2026 | *Endogenous Hyperandrogenism in Women and Its Influence on Exercise Capacity and Athletic Performance* | `42438653` |
+| **Resistance & endurance** | 2026 | *Testosterone Replacement Therapy in Athletes: Implications for Injury Recovery and Musculoskeletal Performance* | `41841062` |
+| **Resistance & endurance** | 2026 | *Factors Influencing the Efficacy of Concurrent Training in Team Sports* | `41766799` |
+| **Hormonal contraception** | 2024 | *Effects of the Menstrual Cycle and Hormonal Contraceptive Use on Metabolic Outcomes, Strength Performance, and Recovery* | `39057670` |
+| **Hormonal contraception** | 2023 | *International society of sports nutrition position stand: nutritional concerns of the female athlete* | `37221858` |
+| **Hormonal contraception** | 2021 | *Sex differences and considerations for female specific nutritional strategies* | `33794937` |
+| **Ergogenic supplements** | 2026 | *Effects of acute caffeine supplementation on physical, physiological, and sport-specific performance in female volleyball players* | `42488219` |
+| **Ergogenic supplements** | 2026 | *Caffeine and physical performance in female intermittent sport athletes: a systematic review and meta-analysis considering menstrual cycle phase* | `42253738` |
+| **Ergogenic supplements** | 2026 | *A systematic review and meta-analysis of the evidence on the acute effects of caffeine on sport-specific skills, physical performance, and physiological function in female basketball players* | `41809105` |
 
 ---
 
-## Acknowledgements
+## 🎯 Getting started: 5 prompts to try
 
-Developed as the capstone project for the **[LLM Zoomcamp](https://github.com/DataTalksClub/llm-zoomcamp)** by DataTalksClub.
+Once the app is running, copy and paste these prompts sequentially to see the Agent's reasoning engine in action. Check the **🤖 Agent Stats** box in the UI to see how many tools and iterations it used!
+
+**1. Conversational (zero-shot)**
+> "Hello, who are you and what can you help me with?"
+*(Expect 1 Iteration, 0 tools used. Fast response.)*
+
+**2. Standard medical search**
+> "What are the effects of the menstrual cycle on endurance running?"
+*(Expect the agent to invoke the `search_medical_literature` tool to retrieve accurate evidence.)*
+
+**3. Tool: ISSN dosage safety checker**
+> "I weigh 55kg and I want to start loading creatine. Is it safe to take 15g today?"
+*(Expect the agent to use the `issn_dosage_safety_checker` tool to mathematically verify the dose against your bodyweight).*
+
+**4. Tool: RED-S calculator (energy availability)**
+> "I weigh 60kg and have 18% body fat. My daily intake is 2200 kcal and I burn 800 kcal exercising on the track. Am I at risk of RED-S?"
+*(Expect the agent to invoke the `calculate_energy_availability` tool to calculate your FFM and EA).*
+
+**5. Parallel execution (search + tools)**
+> "I'm feeling very fatigued. I weigh 58kg and I'm thinking of taking 200mg of iron at once. What does the literature recommend for fatigue, and is this dose safe according to ISSN?"
+*(Expect the agent to invoke BOTH the medical search and the ISSN calculator simultaneously in the same turn).*
